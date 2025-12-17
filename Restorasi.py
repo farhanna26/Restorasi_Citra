@@ -5,17 +5,14 @@ import math
 import pandas as pd
 
 # ======================================================
-# FUNGSI DASAR UNTUK PEMROSESAN CITRA
+# 1. FUNGSI DASAR & UTILITAS
 # ======================================================
 
 def load_image(path, limit=300):
-    """
-    Membaca gambar dan mengecilkan ukurannya bila terlalu besar.
-    """
+    """Membaca gambar dan resize jika terlalu besar."""
     img = cv2.imread(path)
     if img is None:
         print(f"WARNING: Tidak dapat membaca file {path}")
-        # Return gambar hitam dummy agar program tidak crash saat dijalankan tanpa file
         return np.zeros((100, 100, 3), dtype=np.uint8)
 
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -26,9 +23,7 @@ def load_image(path, limit=300):
         resized = cv2.resize(img, (int(w * scale), int(h * scale)))
         print(f"Resize {path}: {w}x{h} -> {resized.shape[1]}x{resized.shape[0]}")
         return resized
-
     return img
-
 
 def convert_to_gray(rgb):
     """Mengubah RGB menjadi grayscale."""
@@ -36,17 +31,22 @@ def convert_to_gray(rgb):
     gray = (0.299 * R + 0.587 * G + 0.114 * B).astype(np.uint8)
     return gray
 
-
 def mse(imgA, imgB):
-    """Menghitung nilai Mean Squared Error (MSE)."""
+    """Menghitung Mean Squared Error."""
+    # Pastikan ukuran sama
     if imgA.shape != imgB.shape:
         imgB = cv2.resize(imgB, (imgA.shape[1], imgA.shape[0]))
-
+    
+    # Jika grayscale vs RGB, konversi salah satu (safety check)
+    if imgA.ndim == 3 and imgB.ndim == 2:
+        imgB = cv2.cvtColor(imgB, cv2.COLOR_GRAY2RGB)
+    elif imgA.ndim == 2 and imgB.ndim == 3:
+        imgA = cv2.cvtColor(imgA, cv2.COLOR_GRAY2RGB)
+        
     return np.mean((imgA.astype(float) - imgB.astype(float)) ** 2)
 
-
 # ======================================================
-# NOISE GENERATORS
+# 2. NOISE GENERATORS
 # ======================================================
 
 def apply_salt_pepper(img, ratio):
@@ -60,69 +60,72 @@ def apply_salt_pepper(img, ratio):
     else:
         noisy[rand_map < ratio / 2] = 255
         noisy[rand_map > 1 - ratio / 2] = 0
-
     return noisy
-
 
 def apply_gaussian(img, mu, sigma):
     """Memberikan noise Gaussian."""
     h, w = img.shape[:2]
-
     if img.ndim == 3:
         gauss = np.random.normal(mu, sigma, (h, w, 3))
     else:
         gauss = np.random.normal(mu, sigma, (h, w))
-
     return np.clip(img + gauss, 0, 255).astype(np.uint8)
 
-
 # ======================================================
-# FILTERING MANUAL
+# 3. FILTERING MANUAL (DIPERBAIKI: SAFE FOR GRAYSCALE)
 # ======================================================
 
-def manual_filter(img, mode, size=3):
-    """
-    Menjalankan filter min, max, mean, atau median secara manual.
-    """
+def apply_filter_logic(img, mode, size):
+    """Fungsi pembantu untuk menangani logika dimensi (2D/3D)."""
     pad = size // 2
     h, w = img.shape[:2]
-
-    if img.ndim == 3:
-        padded = np.pad(img, ((pad, pad), (pad, pad), (0, 0)), mode='edge')
-        result = np.zeros_like(img)
-        channels = 3
-    else:
-        padded = np.pad(img, ((pad, pad), (pad, pad)), mode='edge')[:, :, None]
-        result = np.zeros((h, w, 1), dtype=np.uint8)
+    
+    # Normalisasi ke 3D sementara agar logic loop sama
+    if img.ndim == 2:
+        img_proc = img[:, :, None]
         channels = 1
+    else:
+        img_proc = img
+        channels = 3
+        
+    padded = np.pad(img_proc, ((pad, pad), (pad, pad), (0, 0)), mode='edge')
+    result = np.zeros_like(img_proc)
 
     for y in range(h):
         for x in range(w):
             for c in range(channels):
-                block = padded[y:y+size, x:x+size, c]
-
-                if mode == "min":
-                    val = np.min(block)
-                elif mode == "max":
-                    val = np.max(block)
-                elif mode == "mean":
-                    val = np.mean(block)
-                else:
-                    val = np.median(block)
-
+                window = padded[y:y+size, x:x+size, c]
+                
+                if mode == 'min':
+                    val = np.min(window)
+                elif mode == 'max':
+                    val = np.max(window)
+                elif mode == 'mean':
+                    val = np.mean(window)
+                elif mode == 'median':
+                    val = np.median(window)
+                
                 result[y, x, c] = val
 
-    return result[:, :, 0] if channels == 1 else result
+    # Kembalikan ke bentuk asal
+    if img.ndim == 2:
+        return result[:, :, 0]
+    return result
 
+# Wrapper Functions agar bisa dipanggil terpisah
+def mean_filter(img, size=3): return apply_filter_logic(img, 'mean', size)
+def median_filter(img, size=3): return apply_filter_logic(img, 'median', size)
+def min_filter(img, size=3): return apply_filter_logic(img, 'min', size)
+def max_filter(img, size=3): return apply_filter_logic(img, 'max', size)
 
 # ======================================================
-# MEMBACA GAMBAR
+# 4. MAIN PROGRAM
 # ======================================================
 
 print("\n--- MEMUAT GAMBAR ---")
-# PASTIKAN NAMA FILE SESUAI DENGAN YANG ADA DI FOLDER ANDA
+# Pastikan nama file gambar ada di folder yang sama
 land = load_image("Pemandangan.jpg") 
-port = load_image("Potrait.jpg") 
+port = load_image("Pemandangan.jpg") # Sesuaikan jika ada gambar portrait beda
 
 if land is None: land = np.zeros((100,100,3), dtype=np.uint8)
 if port is None: port = np.zeros((100,100,3), dtype=np.uint8)
@@ -139,16 +142,10 @@ image_sets = {
     ]
 }
 
-# ======================================================
-# GENERATE NOISE
-# ======================================================
-
+# --- GENERATE NOISE ---
 print("--- MEMBUAT VARIASI NOISE ---")
-
-SP1 = 0.02
-SP2 = 0.10
-GS1 = 10
-GS2 = 40
+SP1, SP2 = 0.02, 0.10
+GS1, GS2 = 10, 40
 
 def create_noise_pack(label, func, *params):
     pack = []
@@ -161,13 +158,15 @@ image_sets["SP2"] = create_noise_pack("SP-2", apply_salt_pepper, SP2)
 image_sets["GS1"] = create_noise_pack("GS-1", apply_gaussian, 0, GS1)
 image_sets["GS2"] = create_noise_pack("GS-2", apply_gaussian, 0, GS2)
 
-# ======================================================
-# PENERAPAN FILTERS & PENGUMPULAN DATA
-# ======================================================
+# --- APPLY FILTERS ---
+filter_functions = {
+    "min": min_filter,
+    "max": max_filter,
+    "median": median_filter,
+    "mean": mean_filter
+}
 
-filters = ["min", "max", "median", "mean"]
 noise_groups = ["SP1", "SP2", "GS1", "GS2"]
-
 filtered_results = {}
 mse_data_list = [] 
 
@@ -175,139 +174,116 @@ print("\n--- PROSES FILTER MANUAL (Mohon Tunggu) ---\n")
 
 for ng in noise_groups:
     filtered_results[ng] = {}
-
-    for f in filters:
+    for f_name, f_func in filter_functions.items():
         group_out = []
-        
         for name, noisy in image_sets[ng]:
             # Cari gambar original yang sesuai
-            if "Landscape Gray" in name:
-                ori = land_g
-            elif "Portrait Gray" in name:
-                ori = port_g
-            elif "Landscape" in name:
-                ori = land
-            else:
-                ori = port
+            if "Landscape Gray" in name: ori = land_g
+            elif "Portrait Gray" in name: ori = port_g
+            elif "Landscape" in name: ori = land
+            else: ori = port
             
-            filtered = manual_filter(noisy, f)
+            # PROSES FILTER (Sekarang aman untuk Grayscale)
+            filtered = f_func(noisy) 
             score = mse(ori, filtered)
             
-            # Simpan hasil untuk visualisasi gambar
-            group_out.append((f"{name} + {ng} + {f}\n(MSE={score:.2f})", filtered))
-
-            # Simpan data untuk Grafik & Tabel
+            group_out.append((f"{name} | {ng} | {f_name}\n(MSE={score:.2f})", filtered))
             mse_data_list.append({
                 "Noise Type": ng,
                 "Image Name": name,
-                "Filter": f.capitalize(),
-                "MSE": score
+                "Filter": f_name.upper(),
+                "MSE": score,
+                "Category": "Grayscale" if "Gray" in name else "RGB"
             })
-
-        filtered_results[ng][f] = group_out
+        filtered_results[ng][f_name] = group_out
 
 # ======================================================
-# FUNGSI VISUALISASI GRAFIK & TABEL (MODIFIKASI: SATU PER SATU)
+# 5. VISUALISASI DUA GRAFIK BESAR (RGB & GRAYSCALE)
 # ======================================================
 
-def generate_analysis_report(data):
+def generate_two_charts(data):
     df = pd.DataFrame(data)
     
-    # 1. PRINT TABEL
-    print("\n" + "="*50)
-    print("TABEL PERBANDINGAN NILAI MSE")
-    print("="*50)
+    # Buat kolom Label gabungan (Noise + Filter) untuk X-Axis
+    df['Label'] = df['Noise Type'] + "\n" + df['Filter']
     
-    pivot_df = df.pivot_table(index=["Noise Type", "Image Name"], 
-                              columns="Filter", 
-                              values="MSE")
+    # Pisahkan data RGB dan Grayscale
+    df_rgb = df[df['Category'] == "RGB"]
+    df_gray = df[df['Category'] == "Grayscale"]
     
-    pd.options.display.float_format = '{:.2f}'.format
-    print(pivot_df)
-    print("\n" + "="*50)
+    # Fungsi pembantu plotting
+    def plot_grouped_bar(dataframe, title):
+        if dataframe.empty: return
 
-    # 2. GENERATE GRAFIK BATANG SATU PER SATU
-    print("\nMenampilkan grafik satu per satu... (Tutup jendela grafik untuk melihat berikutnya)")
-    
-    noise_types = df["Noise Type"].unique()
-    image_names = df["Image Name"].unique()
-    
-    bar_colors = ['#ff9999', '#66b3ff', '#99ff99', '#ffcc99'] 
-    
-    for noise in noise_types:
-        for img_name in image_names:
-            # Membuat Figure Baru untuk setiap kombinasi
-            plt.figure(figsize=(10, 6)) # Ukuran cukup besar agar jelas
+        # Pivot data: Index=Label, Kolom=NamaGambar, Isi=MSE
+        pivot_df = dataframe.pivot_table(index='Label', columns='Image Name', values='MSE')
+        
+        # Urutkan index agar rapi (SP1 dulu, baru SP2, dst)
+        # Kita buat custom sort order
+        desired_order = []
+        for n in ["SP1", "SP2", "GS1", "GS2"]:
+            for f in ["MIN", "MAX", "MEDIAN", "MEAN"]:
+                desired_order.append(f"{n}\n{f}")
+        
+        # Filter hanya label yang ada di data
+        existing_order = [x for x in desired_order if x in pivot_df.index]
+        pivot_df = pivot_df.reindex(existing_order)
+        
+        # Plotting
+        ax = pivot_df.plot(kind='bar', figsize=(15, 8), width=0.8, edgecolor='black', alpha=0.8)
+        
+        plt.title(title, fontsize=16, fontweight='bold', pad=20)
+        plt.ylabel("Nilai MSE (Semakin Rendah Semakin Baik)", fontsize=12)
+        plt.xlabel("Jenis Noise & Filter", fontsize=12)
+        plt.xticks(rotation=45)
+        plt.grid(axis='y', linestyle='--', alpha=0.5)
+        plt.legend(title="Citra", loc='upper right')
+        
+        # Tambahkan label angka di atas bar
+        for container in ax.containers:
+            ax.bar_label(container, fmt='%.0f', fontsize=9, padding=3, rotation=90)
             
-            subset = df[(df["Noise Type"] == noise) & (df["Image Name"] == img_name)]
-            subset = subset.sort_values(by="Filter")
-            
-            # Plot Bar Chart
-            bars = plt.bar(subset["Filter"], subset["MSE"], color=bar_colors, edgecolor='grey', width=0.6)
-            
-            # Tambahkan label nilai di atas batang
-            for bar in bars:
-                height = bar.get_height()
-                plt.annotate(f'{height:.1f}',
-                            xy=(bar.get_x() + bar.get_width() / 2, height),
-                            xytext=(0, 5), # Jarak teks dari bar
-                            textcoords="offset points",
-                            ha='center', va='bottom', fontsize=11, fontweight='bold')
+        plt.tight_layout()
+        plt.show()
 
-            plt.title(f"Perbandingan MSE: {img_name} dengan Noise {noise}", fontweight='bold', fontsize=14)
-            plt.ylabel("Nilai MSE (Lebih Rendah Lebih Baik)", fontsize=12)
-            plt.xlabel("Jenis Filter", fontsize=12)
-            plt.grid(axis='y', linestyle='--', alpha=0.5)
-            
-            # Atur margin agar tidak terpotong
-            plt.tight_layout()
-            
-            # Tampilkan Grafik
-            plt.show() 
+    # 1. TAMPILKAN TABEL DATA DULU
+    print("\n" + "="*60)
+    print("TABEL DATA MSE LENGKAP")
+    print("="*60)
+    print(df.pivot_table(index=['Noise Type', 'Filter'], columns='Image Name', values='MSE'))
 
-# ======================================================
-# DISPLAY GAMBAR (VISUALISASI)
-# ======================================================
+    # 2. PLOT GRAFIK 1: RGB
+    print("\nMenampilkan Grafik 1: Perbandingan MSE untuk Citra RGB...")
+    plot_grouped_bar(df_rgb, "Perbandingan MSE Filter (Kategori RGB)")
+    
+    # 3. PLOT GRAFIK 2: GRAYSCALE
+    print("\nMenampilkan Grafik 2: Perbandingan MSE untuk Citra Grayscale...")
+    plot_grouped_bar(df_gray, "Perbandingan MSE Filter (Kategori Grayscale)")
 
 def show_series(data, title):
-    """Menampilkan kumpulan gambar sebagai grid."""
     n = len(data)
     cols = 2
     rows = math.ceil(n / cols)
-
     plt.figure(figsize=(10, rows * 4))
     plt.suptitle(title, fontsize=14, fontweight="bold")
-
     for i, (label, img) in enumerate(data):
         plt.subplot(rows, cols, i + 1)
-        if img.ndim == 2:
-            plt.imshow(img, cmap="gray")
-        else:
-            plt.imshow(img)
+        if img.ndim == 2: plt.imshow(img, cmap="gray")
+        else: plt.imshow(img)
         plt.title(label, fontsize=10)
         plt.xticks([]); plt.yticks([])
-
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plt.show()
 
-# --- EKSEKUSI UTAMA ---
+# --- EKSEKUSI ---
+print("Menghasilkan Laporan Analisis...")
+generate_two_charts(mse_data_list)
 
-# 1. Tampilkan Grafik Analisis Terlebih Dahulu (Satu per satu)
-print("Menampilkan Grafik Analisis...")
-generate_analysis_report(mse_data_list)
+# (Opsional) Tampilkan Gambar Hasil Filter
+# Uncomment baris di bawah ini jika ingin melihat gambar hasil filter
+# print("Menampilkan Gambar Hasil...")
+# for group in noise_groups:
+#     for f in ["median"]: # Contoh: hanya menampilkan hasil median biar tidak kebanyakan
+#         show_series(filtered_results[group][f], f"Hasil Filter {f.upper()} pada {group}")
 
-# 2. Tampilkan Gambar Asli & Noise (Tetap grid agar ringkas)
-print("Menampilkan Gambar Awal & Noise...")
-show_series(image_sets["Original"], "Gambar Awal")
-show_series(image_sets["SP1"], "Noise Salt-Pepper Level 1")
-show_series(image_sets["SP2"], "Noise Salt-Pepper Level 2")
-show_series(image_sets["GS1"], "Gaussian Noise Level 1")
-show_series(image_sets["GS2"], "Gaussian Noise Level 2")
-
-# 3. Tampilkan Hasil Filter
-print("Menampilkan Hasil Filter...")
-for group in noise_groups:
-    for f in filters:
-        show_series(filtered_results[group][f], f"Hasil Filter {f.upper()} pada {group}")
-
-print("\nSelesai. Semua output telah ditampilkan.")
+print("\nSelesai.")
